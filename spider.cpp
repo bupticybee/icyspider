@@ -403,10 +403,12 @@ void extraceUrls(string htmlcontent,string host,string resource){
 		//cout<<it->first<<"---计数:"<<it->second<<endl;
 		map < string, int >::iterator iter;
 		iter = bloomMap.find(it->first);
+		pthread_mutex_lock(&crawler_mutex);
 		if (iter != bloomMap.end()){
 			continue;
 		}
 		bloomMap[it->first] = 1;
+		pthread_mutex_unlock(&crawler_mutex);
 		_crawlerPool->addTask(new CrawerTask(_host,it->first,_crawlerPool));
 	}
 	
