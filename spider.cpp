@@ -11,7 +11,11 @@
 #include<arpa/inet.h>
 #include<netdb.h>
 #include<string.h>
+#include <time.h>
+#include <regex>
+#include <map>
 using namespace std;
+#define POOL_SIZE 20
 
 /**
     TCP Client class
@@ -53,7 +57,7 @@ bool tcp_client::conn(string address , int port)
             perror("Could not create socket");
         }
          
-        cout<<"Socket created\n";
+        //cout<<"Socket created\n";
     }
     else    {   /* OK , nothing */  }
      
@@ -81,7 +85,7 @@ bool tcp_client::conn(string address , int port)
             //strcpy(ip , inet_ntoa(*addr_list[i]) );
             server.sin_addr = *addr_list[i];
              
-            cout<<address<<" resolved to "<<inet_ntoa(*addr_list[i])<<endl;
+            //cout<<address<<" resolved to "<<inet_ntoa(*addr_list[i])<<endl;
              
             break;
         }
@@ -103,7 +107,7 @@ bool tcp_client::conn(string address , int port)
         return 1;
     }
      
-    cout<<"Connected\n";
+    //cout<<"Connected\n";
     return true;
 }
  
@@ -118,7 +122,7 @@ bool tcp_client::send_data(string data)
         perror("Send failed : ");
         return false;
     }
-    cout<<"Data send\n";
+    //cout<<"Data send\n";
      
     return true;
 }
@@ -298,7 +302,6 @@ WorkQueue workQueue;
 // stdout is a shared resource, so protected it with a mutex
 static pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t crawler_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t analysis_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Debugging function
 void showTask(int n) {
@@ -306,18 +309,79 @@ pthread_mutex_lock(&console_mutex);
 pthread_mutex_unlock(&console_mutex);
 }
 
+
 // Task to compute fibonacci numbers
 // It's more efficient to use an iterative algorithm, but
 // the recursive algorithm takes longer and is more interesting
-// than sleeping for X seconds to show parrallelism
+// tha
 class CrawerTask : public Task {
 public:
-CrawerTask(string host,string resource, ThreadPool *crawlerPool, ThreadPool *analysisPool) : Task(), _host(host), _resource(resource), _crawlerPool(crawlerPool),  _analysisPool(analysisPool) {}
+CrawerTask(string host,string resource, ThreadPool *crawlerPool) : Task(), _host(host), _resource(resource), _crawlerPool(crawlerPool)   {}
 ~CrawerTask() {
 	// Debug prints
-	pthread_mutex_lock(&console_mutex);
-	cout << "deleting job url:" << _resource << endl;
-	pthread_mutex_unlock(&console_mutex);		
+}
+void extraceUrls(string htmlcontent,string host,string resource){
+	map<string,int> mapLink;	//容器用于存放抽取出来的链接和计数
+	string line;  //一行数据
+	string::size_type st1,st2;
+	string strlink;  //一条链接
+	string baseurl;	//基准url，用于相对路径
+	st1=htmlcontent.find("base href=\"");
+	st2=htmlcontent.find("\"",st1+11);
+	if(st1!=string::npos&&st2!=string::npos)
+	{
+	  baseurl=htmlcontent.substr(st1+11,st2-(st1+11));
+	}
+	st1=0;
+	while(true)  //抽取出链接
+	{
+		st1=htmlcontent.find("href=\"",st1);  //找到链接的开始标记href="
+		if(st1!=string::npos)	//若存在链接
+		{
+			 st2=htmlcontent.find("\"",st1+6);	//找到链接的结束标记"
+			 strlink=htmlcontent.substr(st1+6,st2-(st1+6));		  //截取子字符串，即链接
+			 if(strlink.find("http://")!=0)  //不是以http://开头的链接加上baseurl
+			 {
+				 
+				if(!baseurl.empty() && strlink.find("/") == 0)  
+				{ 
+					strlink=strlink;
+				}
+				else if(!baseurl.empty() && strlink.find("://") == -1)  
+				{ 
+					strlink= resource + strlink;
+				}
+				else
+				{
+					strlink.erase();
+					st1=st2+1;
+					continue;
+				}
+				mapLink[strlink]++;  //将链接加入容器，并计数
+			}else if(strlink.find("http://" + host) == 0){
+				strlink.replace(0,7 + host.size(),"");
+				mapLink[strlink]++;  //将链接加入容器，并计数
+			}
+			strlink.erase();
+			st1=st2+1;
+		}
+		else
+		{
+			break;
+		}
+	}
+	for(map<string,int>::iterator it=mapLink.begin();it!=mapLink.end();it++)
+	{
+		//cout<<it->first<<"---计数:"<<it->second<<endl;
+		map < string, int >::iterator iter;
+		iter = bloomMap.find(it->first);
+		if (iter != bloomMap.end()){
+			continue;
+		}
+		bloomMap[it->first] = 1;
+		_crawlerPool->addTask(new CrawerTask(_host,it->first,_crawlerPool));
+	}
+	
 }
 virtual void run() {
 	// Note: it's important that this isn't contained in the console mutex lock
@@ -340,15 +404,12 @@ virtual void run() {
 		lastcontent = contentadd;
 		fullcontent += contentadd;
 	}
+	extraceUrls(fullcontent,_host,_resource);
 	//cout << fullcontent << endl;
-
-	_analysisPool->addTask(new AnalysisTask(_host,_resource,_crawlerPool,_analysisPool));
+	//_crawlerPool->addTask(new CrawerTask(_host,_resource,_crawlerPool));
 }
 virtual void showTask() {
 	// More debug printing
-	pthread_mutex_lock(&console_mutex);
-	cout << "showing job url:" << _resource << endl;
-	pthread_mutex_unlock(&console_mutex);		
 }
 private:
 // Slow computation of fibonacci sequence
@@ -360,54 +421,24 @@ private:
 string _host;
 string _resource;
 ThreadPool *_crawlerPool;
-ThreadPool *_analysisPool;
+map<string,int> bloomMap;
 };
 
-class AnalysisTask : public Task {
-public:
-AnalysisTask(string host,string resource, ThreadPool *crawlerPool, ThreadPool *analysisPool) : Task(), _host(host), _resource(resource), _crawlerPool(crawlerPool) , _analysisPool(analysisPool) {}
-~AnalysisTask() {
-	// Debug prints
-	pthread_mutex_lock(&console_mutex);
-	cout << "deleting job url:" << _resource << endl;
-	pthread_mutex_unlock(&console_mutex);		
-}
-virtual void run() {
-	// Note: it's important that this isn't contained in the console mutex lock
-	pthread_mutex_lock(&console_mutex);
-	cout << "running job url:" << _resource << endl;
-	pthread_mutex_unlock(&console_mutex);
-}
-virtual void showTask() {
-	// More debug printing
-	pthread_mutex_lock(&console_mutex);
-	cout << "showing job url:" << _resource << endl;
-	pthread_mutex_unlock(&console_mutex);		
-}
-private:
-// Slow computation of fibonacci sequence
-// To make things interesting, and perhaps imporove load balancing, these
-// inner computations could be added to the task queue
-// Ideally set a lower limit on when that's done
-// (i.e. don't create a task for fib(2)) because thread overhead makes it
-// not worth it
-string _host;
-string _resource;
-ThreadPool *_crawlerPool;
-ThreadPool *_analysisPool;
-};
 
 int main(int argc, char *argv[]) 
 {
 	// Create a thread pool
-	ThreadPool *crawlerPool = new ThreadPool(10);
-	ThreadPool *analysisPool = new ThreadPool(10);
+	ThreadPool *crawlerPool = new ThreadPool(POOL_SIZE);
 
 	// Create work for it
 	string starturl = "bbs.hupu.com";
 	string startresource = "/";
 
-	crawlerPool->addTask(new CrawerTask(starturl,startresource,crawlerPool,analysisPool));
+	crawlerPool->addTask(new CrawerTask(starturl,startresource,crawlerPool));
+	int iter = 0;
+	while(iter ++ < 1 || crawlerPool->hasWork()){
+		sleep(3);
+	}
 	delete crawlerPool;
 
 	printf("\n\n\n\n\nCrawler exiting!\n");
