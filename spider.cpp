@@ -30,6 +30,7 @@ private:
      
 public:
     tcp_client();
+    void close_sock();
     bool conn(string, int);
     bool send_data(string data);
     string receive(int);
@@ -40,6 +41,11 @@ tcp_client::tcp_client()
     sock = -1;
     port = 0;
     address = "";
+}
+
+void tcp_client::close_sock() 
+{
+	close(sock);
 }
  
 /**
@@ -320,6 +326,26 @@ CrawerTask(string host,string resource, ThreadPool *crawlerPool) : Task(), _host
 ~CrawerTask() {
 	// Debug prints
 }
+
+bool filter_url(string strlink){
+	bool flag = false;
+	if (strlink.find("#") != string::npos || strlink.find("javascript") != string::npos)
+		flag = true;
+	if (strlink.find(" ") != string::npos)	
+		flag = true;
+	if (strlink.find("\n") != string::npos)	
+		flag = true;
+	if (strlink.find("\t") != string::npos)	
+		flag = true;
+	if (strlink.find("shtmls20") != string::npos)	
+		flag = true;
+	if (strlink.find("mailto") != string::npos)	
+		flag = true;
+	if (strlink.find("upload") != string::npos)	
+		flag = true;
+	return not flag;
+}
+
 void extraceUrls(string htmlcontent,string host,string resource){
 	map<string,int> mapLink;	//容器用于存放抽取出来的链接和计数
 	string line;  //一行数据
@@ -338,16 +364,16 @@ void extraceUrls(string htmlcontent,string host,string resource){
 		st1=htmlcontent.find("href=\"",st1);  //找到链接的开始标记href="
 		if(st1!=string::npos)	//若存在链接
 		{
-			 st2=htmlcontent.find("\"",st1+6);	//找到链接的结束标记"
-			 strlink=htmlcontent.substr(st1+6,st2-(st1+6));		  //截取子字符串，即链接
-			 if(strlink.find("http://")!=0)  //不是以http://开头的链接加上baseurl
-			 {
-				 
-				if(!baseurl.empty() && strlink.find("/") == 0)  
+			st2=htmlcontent.find("\"",st1+6);	//找到链接的结束标记"
+			strlink=htmlcontent.substr(st1+6,st2-(st1+6));		  //截取子字符串，即链接
+			if(strlink.find("http://")!=0)  //不是以http://开头的链接加上baseurl
+			{
+				// strategy to clean some useless url
+				if( strlink.find("/") == 0)  
 				{ 
 					strlink=strlink;
 				}
-				else if(!baseurl.empty() && strlink.find("://") == -1)  
+				else if( strlink.find("://") == string::npos)  
 				{ 
 					strlink= resource + strlink;
 				}
@@ -357,10 +383,12 @@ void extraceUrls(string htmlcontent,string host,string resource){
 					st1=st2+1;
 					continue;
 				}
-				mapLink[strlink]++;  //将链接加入容器，并计数
+				if (filter_url(strlink))
+					mapLink[strlink]++;  //将链接加入容器，并计数
 			}else if(strlink.find("http://" + host) == 0){
 				strlink.replace(0,7 + host.size(),"");
-				mapLink[strlink]++;  //将链接加入容器，并计数
+				if (filter_url(strlink))
+					mapLink[strlink]++;  //将链接加入容器，并计数
 			}
 			strlink.erase();
 			st1=st2+1;
@@ -405,6 +433,7 @@ virtual void run() {
 		fullcontent += contentadd;
 	}
 	extraceUrls(fullcontent,_host,_resource);
+	c.close_sock();
 	//cout << fullcontent << endl;
 	//_crawlerPool->addTask(new CrawerTask(_host,_resource,_crawlerPool));
 }
@@ -431,9 +460,11 @@ int main(int argc, char *argv[])
 	ThreadPool *crawlerPool = new ThreadPool(POOL_SIZE);
 
 	// Create work for it
-	string starturl = "bbs.hupu.com";
-	string startresource = "/";
+	string starturl = "10.108.84.118";
+	string startresource = "/news.sohu.com/";
 
+	pthread_mutex_init(&crawler_mutex,0);
+	
 	crawlerPool->addTask(new CrawerTask(starturl,startresource,crawlerPool));
 	int iter = 0;
 	while(iter ++ < 1 || crawlerPool->hasWork()){
