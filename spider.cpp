@@ -14,8 +14,13 @@
 #include <time.h>
 #include <regex>
 #include <map>
+#include <fstream>
 using namespace std;
 #define POOL_SIZE 20
+string filename;
+int linenum = 0;
+
+static pthread_mutex_t fileout_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
     TCP Client class
@@ -434,6 +439,12 @@ virtual void run() {
 		lastcontent = contentadd;
 		fullcontent += contentadd;
 	}
+	pthread_mutex_lock(&console_mutex);
+	fstream fileout;
+	fileout.open(filename, ios::app);
+	fileout << ++linenum << " " << _host << _resource << " " <<  fullcontent.length() << endl;
+	fileout.close();
+	pthread_mutex_unlock(&console_mutex);
 	extraceUrls(fullcontent,_host,_resource);
 	c.close_sock();
 	//cout << fullcontent << endl;
@@ -459,13 +470,26 @@ map<string,int> bloomMap;
 int main(int argc, char *argv[]) 
 {
 	// Create a thread pool
+	if (argc != 3){
+		cout << "param format : ./spider [starturl] [outfile]" << endl << "[demo]:  ./spider 10.108.84.118/news.sohu.com/ result";
+		exit(EXIT_FAILURE);
+	}
 	ThreadPool *crawlerPool = new ThreadPool(POOL_SIZE);
 
 	// Create work for it
 	string starturl = "10.108.84.118";
 	string startresource = "/news.sohu.com/";
+	filename = "result.txt";
+
+	string fullurl = argv[1];
+	int pos = fullurl.find('/');
+	starturl = fullurl.substr(0,pos);
+	startresource = fullurl.substr(pos,fullurl.length() - 1);
+	
+	filename = argv[2];
 
 	pthread_mutex_init(&crawler_mutex,0);
+	pthread_mutex_init(&fileout_mutex,0);
 	
 	crawlerPool->addTask(new CrawerTask(starturl,startresource,crawlerPool));
 	int iter = 0;
